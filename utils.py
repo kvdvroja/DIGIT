@@ -46,17 +46,14 @@ def generar_pdf_documento(data, template_html):
 
     for pdf_file in [pdf_temp_header_footer, pdf_temp_body, pdf_con_marca_agua, temp_pdf_combinado_path]:
         os.remove(pdf_file)
-        
-    threading.Thread(target=eliminar_archivo_automaticamente, args=(output_pdf_path,), daemon=True).start()
 
     return output_pdf_path
 
-
-def eliminar_archivo_automaticamente(archivo_path):
-    time.sleep(1800)  # 1800 segundos = 30 minutos
-    if os.path.exists(archivo_path):
-        os.remove(archivo_path)
-        print(f"Archivo {archivo_path} eliminado automáticamente después de 30 minutos.")
+# def eliminar_archivo_automaticamente(archivo_path):
+#     time.sleep(1800)  # 1800 segundos = 30 minutos
+#     if os.path.exists(archivo_path):
+#         os.remove(archivo_path)
+#         print(f"Archivo {archivo_path} eliminado automáticamente después de 30 minutos.")
 
 def detectar_marcadores_faltantes(template_html, datos):
     """Detecta los marcadores no reemplazados en la plantilla."""
@@ -161,5 +158,5 @@ def guardar_pdf(pdf_reader, filename, password=None):
 
 # Validación de caracteres especiales
 def contiene_caracteres_invalidos(texto):
-    patron = re.compile(r'^[a-zA-Z0-9 _\-,\.\\:\/]+$')
+    patron = re.compile(r'^[a-zA-ZáéíóúÁÉÍÓÚñÑ0-9 _\-,\.\\:\/\(\)]+$')
     return not patron.match(texto)

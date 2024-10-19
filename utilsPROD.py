@@ -5,43 +5,45 @@ import pdfkit
 import threading
 import time
 import uuid
+import datetime
 from PyPDF2 import PdfReader, PdfWriter
 
 # Función principal que genera el PDF
 def generar_pdf_documento(data, template_html):
-    # Convertimos las claves del JSON en mayúsculas
     datos_procesados = {clave.upper(): valor for clave, valor in data.items()}
 
-    # Reemplazamos los marcadores en la plantilla HTML
+    marcadores_faltantes = detectar_marcadores_faltantes(template_html, datos_procesados)
+
+    if marcadores_faltantes:
+        raise ValueError(f"Marcadores faltantes: {', '.join(marcadores_faltantes)}")
+
     plantilla_html_procesada = re.sub(r'\[(.*?)](.*?)\[/\1\]', lambda match: reemplazar_marcador(match, datos_procesados), template_html)
 
-    # Configuración de pdfkit
     configuracion = pdfkit.configuration(wkhtmltopdf='./wkhtmltopdf/bin/wkhtmltopdf.exe')
 
-    # Generamos el PDF y lo guardamos en un archivo temporal
     pdf_temp_body = generar_pdf_body(plantilla_html_procesada, configuracion)
     pdf_temp_header_footer = generar_pdf_encabezado_pie(plantilla_html_procesada, configuracion)
 
     pdf_writer_combinado = combinar_pdfs_con_marcas(pdf_temp_header_footer, pdf_temp_body)
 
-    # Creamos un archivo temporal para guardar el PDF final
     with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_pdf_combinado:
         pdf_writer_combinado.write(temp_pdf_combinado)
         temp_pdf_combinado_path = temp_pdf_combinado.name
 
-    # Generar el PDF final con marca de agua (si es necesario)
     pdf_con_marca_agua = agregar_marca_agua(temp_pdf_combinado_path, "marcas.pdf")
     
     uploads_dir = os.path.join(os.getcwd(), 'uploads')
     if not os.path.exists(uploads_dir):
         os.makedirs(uploads_dir)
 
-    # Ruta del archivo PDF final que será retornado
-    nombre_unico = f"{uuid.uuid4()}.pdf"
-    output_pdf_path = os.path.join(uploads_dir, nombre_unico)
+    usuario_id = data.get('ID_USUARIO', 'default_user')
+    sGUID = str(uuid.uuid4()).replace("-", "")
+    fecha_actual = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+
+    nombre_generado = f"{usuario_id}-{sGUID}-{fecha_actual}.pdf"
+    output_pdf_path = os.path.join(uploads_dir, nombre_generado)
     guardar_pdf(PdfReader(pdf_con_marca_agua), output_pdf_path)
 
-    # Limpiar archivos temporales
     for pdf_file in [pdf_temp_header_footer, pdf_temp_body, pdf_con_marca_agua, temp_pdf_combinado_path]:
         os.remove(pdf_file)
         
@@ -56,7 +58,20 @@ def eliminar_archivo_automaticamente(archivo_path):
         os.remove(archivo_path)
         print(f"Archivo {archivo_path} eliminado automáticamente después de 30 minutos.")
 
-# Funciones auxiliares
+def detectar_marcadores_faltantes(template_html, datos):
+    """Detecta los marcadores no reemplazados en la plantilla."""
+    marcadores_faltantes = []
+    
+    # Busca todos los marcadores en el formato [MARCADOR][/MARCADOR]
+    marcadores_encontrados = re.findall(r'\[([A-Z_]+)]\[/\1]', template_html)
+    
+    for marcador in marcadores_encontrados:
+        if marcador not in datos:
+            # Si el marcador no está en los datos proporcionados, se considera faltante
+            marcadores_faltantes.append(marcador)
+    
+    return marcadores_faltantes
+
 def reemplazar_marcador(match, datos):
     clave = match.group(1)
     if clave == "TABLA":
@@ -68,14 +83,12 @@ def reemplazar_marcador(match, datos):
             if count == MAX_ROWS_PER_PAGE:
                 rows += "</table><div style='page-break-before: always;'></div><table>"
                 count = 0
-            
             row = "<tr>" + "".join([f"<td>{valor}</td>" for valor in fila]) + "</tr>"
             rows += row
             count += 1
-        
         return rows
     elif clave in datos:
-        return datos[clave]
+        return str(datos[clave])
     return match.group(0)
 
 def generar_pdf_body(plantilla_html, configuracion):
@@ -148,5 +161,5 @@ def guardar_pdf(pdf_reader, filename, password=None):
 
 # Validación de caracteres especiales
 def contiene_caracteres_invalidos(texto):
-    patron = re.compile(r'^[a-zA-Z0-9 _\-,\.\\:\/]+$')
+    patron = re.compile(r'^[a-zA-ZáéíóúÁÉÍÓÚñÑ0-9 _\-,\.\\:\/\(\)]+$')
     return not patron.match(texto)

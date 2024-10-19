@@ -8,6 +8,7 @@ from io import BytesIO
 import requests
 import configparser
 import tempfile
+from urllib.parse import urlparse
 import threading
 
 app = Flask(__name__)
@@ -40,9 +41,6 @@ def cifrar_pdf(pdf_path, key):
 
     return encrypted_pdf_path
 
-
-
-# Función para desencriptar el PDF usando AES
 def descifrar_pdf(encrypted_pdf_path, key):
     with open(encrypted_pdf_path, 'rb') as enc_file:
         iv = enc_file.read(16)  
@@ -55,13 +53,18 @@ def descifrar_pdf(encrypted_pdf_path, key):
 
     return unpadded_data
 
-def subir_archivo_en_segundo_plano(ruta_ws_upload_file, archivo_contenido, payload, nombre_archivo):
+def subir_archivo_en_segundo_plano(ruta_ws_upload_file, archivo_contenido, payload, nombre_archivo, archivo_local_path):
     try:
         archivo = {'file1': (nombre_archivo + ".enc", BytesIO(archivo_contenido), 'application/octet-stream')}
         r = requests.post(ruta_ws_upload_file, files=archivo, data=payload)
         if r.json().get('success') == 1:
             respuesta_imagen = r.json().get('data')
             print(f"Archivo subido correctamente. URL: {respuesta_imagen}")
+            
+            # Si la subida es exitosa, eliminamos el archivo local
+            if os.path.exists(archivo_local_path):
+                os.remove(archivo_local_path)
+                print(f"Archivo {archivo_local_path} eliminado después de la subida exitosa.")
         else:
             print("Error al subir el archivo")
     except requests.exceptions.HTTPError as errh:
@@ -71,12 +74,44 @@ def subir_archivo_en_segundo_plano(ruta_ws_upload_file, archivo_contenido, paylo
     except requests.exceptions.Timeout as errt:
         print("Timeout Error:", errt)
     except requests.exceptions.RequestException as err:
-        print("OOps: Something Else", err)
+        print("Oops: Something Else", err)
 
+        
+def obtener_base_url(url_completa):
+    from urllib.parse import urlparse
+    parsed_url = urlparse(url_completa)
+    return f"{parsed_url.scheme}://{parsed_url.netloc}"
+
+def realizar_curl(url_base):
+    try:
+        response = requests.get(url_base, timeout=5)
+        if response.status_code == 403:
+            print("Servicio activo pero con acceso restringido.")
+            return True
+        response.raise_for_status()
+        return True
+    except requests.ConnectionError:
+        return False
+    except requests.Timeout:
+        return False
+    except requests.RequestException:
+        return False
+
+    
 @app.route('/generate-pdf', methods=['POST'])
 def generate_pdf():
     try:
         data = request.json.get('data')
+        
+        ruta_ws_upload_file = configuracion.get('GENERAL', 'ruta_ws_upload_file')
+        base_url = obtener_base_url(ruta_ws_upload_file)
+
+        # Verificamos la conexión a la base URL
+        # if not realizar_curl(base_url):
+        #     return jsonify({
+        #         "message": f"No se pudo conectar a {base_url}.",
+        #         "success": 2
+        #     }), 500
 
         for clave, valor in data.items():
             if isinstance(valor, str) and contiene_caracteres_invalidos(valor):
@@ -94,7 +129,6 @@ def generate_pdf():
         with open(encrypted_pdf_path, 'rb') as pdf_file:
             archivo_contenido = pdf_file.read()
 
-        ruta_ws_upload_file = configuracion.get('GENERAL', 'ruta_ws_upload_file')
         token_ws_upload = request.json.get('token')
         usuario_id = data.get('ID_USUARIO', 'default_user')
 
@@ -105,7 +139,8 @@ def generate_pdf():
             'nombre_archivo': os.path.basename(encrypted_pdf_path)
         }
 
-        threading.Thread(target=subir_archivo_en_segundo_plano, args=(ruta_ws_upload_file, archivo_contenido, payload, os.path.basename(encrypted_pdf_path)), daemon=True).start()
+        # Llamamos a la función de subida pasando la ruta local del archivo para eliminarlo después
+        threading.Thread(target=subir_archivo_en_segundo_plano, args=(ruta_ws_upload_file, archivo_contenido, payload, os.path.basename(encrypted_pdf_path), encrypted_pdf_path), daemon=True).start()
 
         return jsonify({
             "success": 1,
