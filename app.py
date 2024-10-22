@@ -6,6 +6,7 @@ from cryptography.hazmat.primitives import padding
 import os
 from io import BytesIO
 import requests
+import logging
 import configparser
 import tempfile
 from urllib.parse import urlparse
@@ -15,6 +16,19 @@ app = Flask(__name__)
 
 configuracion = configparser.ConfigParser()
 configuracion.read('config/config.cfg')
+
+def escribir_log_fallo_subida(archivo_local_path, nombre_archivo):
+    logs_dir = os.path.join(os.getcwd(), 'logs')
+    
+    if not os.path.exists(logs_dir):
+        os.makedirs(logs_dir)
+    
+    log_path = os.path.join(logs_dir, 'fallos_subida.log')
+    
+    logging.basicConfig(filename=log_path, level=logging.INFO, format='%(asctime)s %(message)s')
+    
+    logging.info(f'Archivo no subido: {nombre_archivo} | Ruta local: {archivo_local_path}')
+    print(f"Log registrado: No se pudo subir el archivo {nombre_archivo}")
 
 def obtener_clave_encriptacion(key):
     if len(key) < 16:
@@ -57,24 +71,54 @@ def subir_archivo_en_segundo_plano(ruta_ws_upload_file, archivo_contenido, paylo
     try:
         archivo = {'file1': (nombre_archivo + ".enc", BytesIO(archivo_contenido), 'application/octet-stream')}
         r = requests.post(ruta_ws_upload_file, files=archivo, data=payload)
+        
         if r.json().get('success') == 1:
             respuesta_imagen = r.json().get('data')
             print(f"Archivo subido correctamente. URL: {respuesta_imagen}")
             
-            # Si la subida es exitosa, eliminamos el archivo local
             if os.path.exists(archivo_local_path):
                 os.remove(archivo_local_path)
                 print(f"Archivo {archivo_local_path} eliminado después de la subida exitosa.")
         else:
             print("Error al subir el archivo")
-    except requests.exceptions.HTTPError as errh:
-        print("Http Error:", errh)
-    except requests.exceptions.ConnectionError as errc:
-        print("Error Connecting:", errc)
-    except requests.exceptions.Timeout as errt:
-        print("Timeout Error:", errt)
+            escribir_log_fallo_subida(archivo_local_path, nombre_archivo)
+    
     except requests.exceptions.RequestException as err:
-        print("Oops: Something Else", err)
+        print(f"Error al conectar con el servicio: {err}")
+        escribir_log_fallo_subida(archivo_local_path, nombre_archivo)
+        
+def reintentar_subida():
+    log_path = os.path.join(os.getcwd(), 'logs', 'fallos_subida.log')
+    
+    if os.path.exists(log_path):
+        with open(log_path, 'r') as log_file:
+            for linea in log_file:
+                partes = linea.split(' | ')
+                archivo_local_path = partes[1].replace('Ruta local: ', '').strip()
+                nombre_archivo = partes[0].replace('Archivo no subido: ', '').strip()
+
+                if os.path.exists(archivo_local_path):
+                    ruta_ws_upload_file = configuracion.get('GENERAL', 'ruta_ws_upload_file')
+                    base_url = obtener_base_url(ruta_ws_upload_file)
+                    if realizar_curl(base_url):
+                        print(f"Reintentando la subida del archivo {nombre_archivo}")
+                        with open(archivo_local_path, 'rb') as pdf_file:
+                            archivo_contenido = pdf_file.read()
+                        token_ws_upload = configuracion.get('GENERAL', 'token_ws_upload') 
+                        payload = {
+                            'usuario': 'default_user',
+                            'ruta': configuracion.get('GENERAL', 'ruta'),
+                            'token': token_ws_upload,
+                            'nombre_archivo': nombre_archivo
+                        }
+                        # Intenta subir nuevamente el archivo
+                        subir_archivo_en_segundo_plano(ruta_ws_upload_file, archivo_contenido, payload, nombre_archivo, archivo_local_path)
+
+        # Eliminar el log después de procesar las subidas
+        os.remove(log_path)
+        print("Log de fallos de subida eliminado.")
+    else:
+        print("No hay archivos pendientes de subida.")
 
         
 def obtener_base_url(url_completa):
@@ -91,11 +135,16 @@ def realizar_curl(url_base):
         response.raise_for_status()
         return True
     except requests.ConnectionError:
+        print(f"No se pudo conectar a {url_base}. Servicio inactivo.")
         return False
     except requests.Timeout:
+        print(f"Timeout al intentar conectar a {url_base}.")
         return False
-    except requests.RequestException:
+    except requests.RequestException as err:
+        print(f"Error al intentar conectar a {url_base}: {err}")
         return False
+
+
 
     
 @app.route('/generate-pdf', methods=['POST'])
@@ -106,12 +155,7 @@ def generate_pdf():
         ruta_ws_upload_file = configuracion.get('GENERAL', 'ruta_ws_upload_file')
         base_url = obtener_base_url(ruta_ws_upload_file)
 
-        # Verificamos la conexión a la base URL
-        # if not realizar_curl(base_url):
-        #     return jsonify({
-        #         "message": f"No se pudo conectar a {base_url}.",
-        #         "success": 2
-        #     }), 500
+        servicio_activo = realizar_curl(base_url)
 
         for clave, valor in data.items():
             if isinstance(valor, str) and contiene_caracteres_invalidos(valor):
@@ -139,8 +183,13 @@ def generate_pdf():
             'nombre_archivo': os.path.basename(encrypted_pdf_path)
         }
 
-        # Llamamos a la función de subida pasando la ruta local del archivo para eliminarlo después
-        threading.Thread(target=subir_archivo_en_segundo_plano, args=(ruta_ws_upload_file, archivo_contenido, payload, os.path.basename(encrypted_pdf_path), encrypted_pdf_path), daemon=True).start()
+        if servicio_activo:
+            # Si el servicio está activo, intentamos subir el archivo en segundo plano
+            threading.Thread(target=subir_archivo_en_segundo_plano, args=(ruta_ws_upload_file, archivo_contenido, payload, os.path.basename(encrypted_pdf_path), encrypted_pdf_path), daemon=True).start()
+        else:
+            # Si el servicio no está activo, registramos el log para intentar subir el archivo luego
+            escribir_log_fallo_subida(encrypted_pdf_path, os.path.basename(encrypted_pdf_path))
+            print(f"Servicio de almacenamiento inactivo. El archivo {os.path.basename(encrypted_pdf_path)} se subirá más tarde.")
 
         return jsonify({
             "success": 1,
