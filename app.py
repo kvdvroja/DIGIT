@@ -193,9 +193,6 @@ def realizar_curl(url_base):
         print(f"Error al intentar conectar a {url_base}: {err}")
         return False
 
-
-
-    
 @app.route('/generate-pdf', methods=['POST'])
 def generate_pdf():
     try:
@@ -263,34 +260,60 @@ def get_archivo():
         url_get_archivo = configuracion.get('GENERAL', 'ruta_get_file')
         token = request.json.get('token')
 
-        response = requests.post(url_get_archivo, json={
-            "token": token,
-            "ruta": ruta,
-            "nombre_archivo": nombre_archivo 
-        })
+        base_url = obtener_base_url(url_get_archivo)
+        servicio_activo = realizar_curl(base_url)
 
-        if response.status_code == 200:
-            encrypted_pdf_data = response.content
-
-            print(f"Tamaño del archivo cifrado recibido: {len(encrypted_pdf_data)} bytes")
-
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.enc') as temp_enc:
-                temp_enc.write(encrypted_pdf_data)
-                temp_enc_path = temp_enc.name
-
-            encryption_key = obtener_clave_encriptacion(configuracion.get('GENERAL', 'encryption_key'))
-            decrypted_pdf_data = descifrar_pdf(temp_enc_path, encryption_key)
-
-            os.remove(temp_enc_path)
+        if servicio_activo:
+            reintentar_subida()
             
-            return send_file(
-                BytesIO(decrypted_pdf_data),
-                mimetype='application/pdf',
-                as_attachment=True,
-                download_name=nombre_archivo + ".pdf"
-            )
+            response = requests.post(url_get_archivo, json={
+                "token": token,
+                "ruta": ruta,
+                "nombre_archivo": nombre_archivo
+            })
+
+            if response.status_code == 200:
+                encrypted_pdf_data = response.content
+
+                print(f"Tamaño del archivo cifrado recibido: {len(encrypted_pdf_data)} bytes")
+
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.enc') as temp_enc:
+                    temp_enc.write(encrypted_pdf_data)
+                    temp_enc_path = temp_enc.name
+
+                encryption_key = obtener_clave_encriptacion(configuracion.get('GENERAL', 'encryption_key'))
+                decrypted_pdf_data = descifrar_pdf(temp_enc_path, encryption_key)
+
+                os.remove(temp_enc_path)
+                
+                return send_file(
+                    BytesIO(decrypted_pdf_data),
+                    mimetype='application/pdf',
+                    as_attachment=True,
+                    download_name=nombre_archivo + ".pdf"
+                )
+            else:
+                return jsonify(response.json()), response.status_code
         else:
-            return jsonify(response.json()), response.status_code
+            archivo_local_path = os.path.join(os.getcwd(), 'uploads', nombre_archivo)
+            
+            if os.path.exists(archivo_local_path):
+                print(f"El archivo {archivo_local_path} fue encontrado localmente, sirviéndolo ahora...")
+                
+                with open(archivo_local_path, 'rb') as enc_file:
+                    encrypted_pdf_data = enc_file.read()
+
+                encryption_key = obtener_clave_encriptacion(configuracion.get('GENERAL', 'encryption_key'))
+                decrypted_pdf_data = descifrar_pdf(archivo_local_path, encryption_key)
+
+                return send_file(
+                    BytesIO(decrypted_pdf_data),
+                    mimetype='application/pdf',
+                    as_attachment=True,
+                    download_name=nombre_archivo + ".pdf"
+                )
+            else:
+                return jsonify({"success": 2, "message": "Archivo no encontrado localmente"}), 404
 
     except Exception as e:
         print(f"Error: {e}")
@@ -299,8 +322,6 @@ def get_archivo():
             "message": "Error al buscar el archivo",
             "error": str(e)
         }), 500
-
-
 
 if __name__ == '__main__':
     app.run(debug=True)
