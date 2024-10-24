@@ -1,5 +1,0 @@
-2024-10-21 09:33:54,866 Archivo no subido: default_user-08db1c8fbedf48068bdea81efcf30be1-20241021093354.pdf.enc | Ruta local: C:\Users\krodriguezj2\Desktop\DIGIT\uploads\default_user-08db1c8fbedf48068bdea81efcf30be1-20241021093354.pdf.enc
-2024-10-21 09:33:54,867 127.0.0.1 - - [21/Oct/2024 09:33:54] "POST /generate-pdf HTTP/1.1" 200 -
-2024-10-21 09:34:38,257 Archivo no subido: default_user-393b4cbcb74c40c9bb1dc583309f90af-20241021093438.pdf.enc | Ruta local: C:\Users\krodriguezj2\Desktop\DIGIT\uploads\default_user-393b4cbcb74c40c9bb1dc583309f90af-20241021093438.pdf.enc
-2024-10-21 09:34:38,259 127.0.0.1 - - [21/Oct/2024 09:34:38] "POST /generate-pdf HTTP/1.1" 200 -
-2024-10-21 09:36:06,036 127.0.0.1 - - [21/Oct/2024 09:36:06] "POST /generate-pdf HTTP/1.1" 200 -

@@ -12,23 +12,59 @@ import tempfile
 from urllib.parse import urlparse
 import threading
 
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR) 
+
 app = Flask(__name__)
 
 configuracion = configparser.ConfigParser()
 configuracion.read('config/config.cfg')
 
+def hay_fallos_pendientes():
+    log_path = os.path.join(os.getcwd(), 'logs', 'fallos_subida.log')
+    
+    if not os.path.exists(log_path):
+        return False
+    
+    try:
+        with open(log_path, 'r') as log_file:
+            contenido = log_file.read().strip()
+            if contenido:
+                print("Se encontraron fallos pendientes de subir.")
+                return True
+            else:
+                print("No hay fallos pendientes de subir.")
+                return False
+    except Exception as e:
+        print(f"Error al leer el log de fallos: {e}")
+        return False
+
 def escribir_log_fallo_subida(archivo_local_path, nombre_archivo):
     logs_dir = os.path.join(os.getcwd(), 'logs')
-    
+
     if not os.path.exists(logs_dir):
         os.makedirs(logs_dir)
-    
+
     log_path = os.path.join(logs_dir, 'fallos_subida.log')
-    
-    logging.basicConfig(filename=log_path, level=logging.INFO, format='%(asctime)s %(message)s')
-    
-    logging.info(f'Archivo no subido: {nombre_archivo} | Ruta local: {archivo_local_path}')
+
+    if os.path.exists(log_path):
+        with open(log_path, 'r') as log_file:
+            lines = log_file.readlines()
+            if any(f'{nombre_archivo} | Ruta local: {archivo_local_path}' in line for line in lines):
+                print(f"El archivo {nombre_archivo} ya está registrado como no subido. No se duplicará.")
+                return
+            
+    logger = logging.getLogger('fallos_subida')
+    logger.setLevel(logging.INFO)
+
+    if not logger.hasHandlers():
+        handler = logging.FileHandler(log_path)
+        logger.addHandler(handler)
+
+    # Registrar solo la información del archivo actual
+    logger.info(f'{nombre_archivo}')
     print(f"Log registrado: No se pudo subir el archivo {nombre_archivo}")
+
 
 def obtener_clave_encriptacion(key):
     if len(key) < 16:
@@ -90,37 +126,50 @@ def subir_archivo_en_segundo_plano(ruta_ws_upload_file, archivo_contenido, paylo
 def reintentar_subida():
     log_path = os.path.join(os.getcwd(), 'logs', 'fallos_subida.log')
     
-    if os.path.exists(log_path):
-        with open(log_path, 'r') as log_file:
-            for linea in log_file:
-                partes = linea.split(' | ')
-                archivo_local_path = partes[1].replace('Ruta local: ', '').strip()
-                nombre_archivo = partes[0].replace('Archivo no subido: ', '').strip()
+    if hay_fallos_pendientes():
+        #print("Intentando re-subir archivos fallidos...")
+
+        if os.path.exists(log_path):
+            archivos_exitosos = []
+
+            with open(log_path, 'r') as log_file:
+                lineas_pendientes = log_file.readlines()
+
+            for linea in lineas_pendientes:
+                nombre_archivo = linea.strip()
+
+                archivo_local_path = os.path.join(os.getcwd(), 'uploads', nombre_archivo)
 
                 if os.path.exists(archivo_local_path):
+                    print(f"El archivo {archivo_local_path} aún está disponible, intentando subir nuevamente...")
+
+                    with open(archivo_local_path, 'rb') as pdf_file:
+                        archivo_contenido = pdf_file.read()
+
                     ruta_ws_upload_file = configuracion.get('GENERAL', 'ruta_ws_upload_file')
-                    base_url = obtener_base_url(ruta_ws_upload_file)
-                    if realizar_curl(base_url):
-                        print(f"Reintentando la subida del archivo {nombre_archivo}")
-                        with open(archivo_local_path, 'rb') as pdf_file:
-                            archivo_contenido = pdf_file.read()
-                        token_ws_upload = configuracion.get('GENERAL', 'token_ws_upload') 
-                        payload = {
-                            'usuario': 'default_user',
-                            'ruta': configuracion.get('GENERAL', 'ruta'),
-                            'token': token_ws_upload,
-                            'nombre_archivo': nombre_archivo
-                        }
-                        # Intenta subir nuevamente el archivo
-                        subir_archivo_en_segundo_plano(ruta_ws_upload_file, archivo_contenido, payload, nombre_archivo, archivo_local_path)
+                    token_ws_upload = configuracion.get('GENERAL', 'token_ws_upload')
+                    payload = {
+                        'usuario': 'default_user',
+                        'ruta': configuracion.get('GENERAL', 'ruta'),
+                        'token': token_ws_upload,
+                        'nombre_archivo': nombre_archivo
+                    }
 
-        # Eliminar el log después de procesar las subidas
-        os.remove(log_path)
-        print("Log de fallos de subida eliminado.")
-    else:
-        print("No hay archivos pendientes de subida.")
+                    subir_archivo_en_segundo_plano(ruta_ws_upload_file, archivo_contenido, payload, nombre_archivo, archivo_local_path)
 
-        
+                    archivos_exitosos.append(nombre_archivo)
+                else:
+                    print(f"El archivo {archivo_local_path} ya no está disponible, no se puede subir.")
+            
+            lineas_restantes = [linea for linea in lineas_pendientes if linea.strip() not in archivos_exitosos]
+
+            with open(log_path, 'w') as log_file:
+                log_file.writelines(lineas_restantes)
+
+            if not lineas_restantes:
+                print("Todos los archivos fallidos se han subido, el log está limpio.")
+        else:
+            print("No hay archivos pendientes de subida.")
 def obtener_base_url(url_completa):
     from urllib.parse import urlparse
     parsed_url = urlparse(url_completa)
@@ -157,6 +206,9 @@ def generate_pdf():
 
         servicio_activo = realizar_curl(base_url)
 
+        if servicio_activo:
+            reintentar_subida()
+
         for clave, valor in data.items():
             if isinstance(valor, str) and contiene_caracteres_invalidos(valor):
                 return jsonify({"success": 2, "message": f"Se detectaron caracteres especiales no permitidos en el campo '{clave}'"}), 400
@@ -184,10 +236,8 @@ def generate_pdf():
         }
 
         if servicio_activo:
-            # Si el servicio está activo, intentamos subir el archivo en segundo plano
             threading.Thread(target=subir_archivo_en_segundo_plano, args=(ruta_ws_upload_file, archivo_contenido, payload, os.path.basename(encrypted_pdf_path), encrypted_pdf_path), daemon=True).start()
         else:
-            # Si el servicio no está activo, registramos el log para intentar subir el archivo luego
             escribir_log_fallo_subida(encrypted_pdf_path, os.path.basename(encrypted_pdf_path))
             print(f"Servicio de almacenamiento inactivo. El archivo {os.path.basename(encrypted_pdf_path)} se subirá más tarde.")
 
