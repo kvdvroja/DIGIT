@@ -42,7 +42,7 @@ def ejecutar_verificator_periodicamente():
     while True:
         ejecutar_verificator()
         print("Esperando 30 minutos para el siguiente ciclo...")
-        time.sleep(120)  # 30 minutos
+        time.sleep(120)
 
 @app.route('/generate-pdf', methods=['POST'])
 def generate_pdf():
@@ -122,6 +122,71 @@ def get_archivo():
         print(f"Error: {e}")
         return jsonify({"success": 2, "message": "Error al buscar el archivo", "error": str(e)}), 500
 
+UPLOAD_FOLDER = os.path.join(os.getcwd(), 'imagenes')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+@app.route('/guardar-imagen', methods=['POST'])
+def guardar_imagen():
+    try:
+        data = request.json
+        imagen_url = data.get('imagen_url')
+        nombre_archivo = data.get('nombre_archivo')
+
+        if not imagen_url:
+            return jsonify({"success": 0, "message": "URL de la imagen no proporcionada"}), 400
+
+        response = requests.get(imagen_url, stream=True)
+        if response.status_code != 200:
+            return jsonify({"success": 2, "message": "Error al descargar la imagen"}), 400
+
+        _, extension = os.path.splitext(urlparse(imagen_url).path)
+        if not extension:
+            return jsonify({"success": 2, "message": "No se pudo determinar la extensión del archivo"}), 400
+
+        if nombre_archivo:
+            nombre_archivo = f"{nombre_archivo}{extension}"
+        else:
+            nombre_archivo = os.path.basename(urlparse(imagen_url).path)
+
+        ruta_archivo = os.path.join(UPLOAD_FOLDER, nombre_archivo)
+
+        with open(ruta_archivo, 'wb') as archivo:
+            for chunk in response.iter_content(1024):
+                archivo.write(chunk)
+
+        return jsonify({"success": 1, "message": "Imagen guardada correctamente", "nombre_archivo": nombre_archivo})
+
+    except Exception as e:
+        return jsonify({"success": 2, "message": "Error al guardar la imagen", "error": str(e)}), 500
+    
+@app.route('/actualizar-imagen', methods=['POST'])
+def actualizar_imagen():
+    try:
+        data = request.json
+        nombre_archivo = data.get('nombre_archivo')
+        imagen_url = data.get('nueva_imagen_url')
+
+        if not nombre_archivo or not imagen_url:
+            return jsonify({"success": 0, "message": "Nombre de archivo o URL de la nueva imagen no proporcionados"}), 400
+
+        ruta_archivo = os.path.join(UPLOAD_FOLDER, nombre_archivo)
+
+        if not os.path.exists(ruta_archivo):
+            return jsonify({"success": 0, "message": "La imagen no existe"}), 404
+
+        response = requests.get(imagen_url, stream=True)
+        if response.status_code != 200:
+            return jsonify({"success": 0, "message": "Error al descargar la nueva imagen"}), 400
+
+        with open(ruta_archivo, 'wb') as archivo:
+            for chunk in response.iter_content(1024):
+                archivo.write(chunk)
+
+        return jsonify({"success": 1, "message": "Imagen actualizada correctamente"})
+
+    except Exception as e:
+        return jsonify({"success": 0, "message": "Error al actualizar la imagen", "error": str(e)}), 500
+    
 if __name__ == '__main__':
     # Inicia un hilo para ejecutar verificator.py periódicamente
     print("Iniciando hilo para ejecutar verificator.py periódicamente.")
